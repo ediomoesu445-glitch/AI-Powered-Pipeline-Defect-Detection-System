@@ -1,0 +1,9 @@
+data/
+models/*.pt
+!models/best.pt
+__pycache__/
+.venv/
+*.ipynb_checkpoints
+wandb/
+runs/
+.DS_Store
