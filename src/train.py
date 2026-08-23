@@ -116,6 +116,13 @@ def parse_args():
         "to catch shape/normalization bugs in seconds, without downloading "
         "pretrained weights or writing to models/best.pt.",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Warm-start from the existing checkpoint (model weights only, not "
+        "optimizer/scheduler state) instead of fresh pretrained weights, if one "
+        "is already present at the target checkpoint path.",
+    )
     return parser.parse_args()
 
 
@@ -132,6 +139,11 @@ def main() -> None:
 
     print(f"Device: {device} (mixed precision: {use_amp})")
 
+    out_dir = project_root / config["out_dir"]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ckpt_name = "smoke_test.pt" if args.smoke_test else "best.pt"
+    ckpt_path = out_dir / ckpt_name
+
     train_loader, val_loader = build_dataloaders(project_root, config, args.smoke_test)
     print(f"Train batches: {len(train_loader)} | Val batches: {len(val_loader)}")
 
@@ -142,6 +154,17 @@ def main() -> None:
     )
     model.to(device)
 
+    if args.resume:
+        if ckpt_path.exists():
+            prev_checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
+            model.load_state_dict(prev_checkpoint["model_state_dict"])
+            print(
+                f"Resumed (warm-start) from {ckpt_path} "
+                f"(previous val_accuracy={prev_checkpoint['val_accuracy']:.4f})"
+            )
+        else:
+            print(f"--resume given but no checkpoint found at {ckpt_path} - starting fresh")
+
     criterion = nn.CrossEntropyLoss(label_smoothing=config["label_smoothing"])
     optimizer = AdamW(model.parameters(), lr=config["lr"], weight_decay=config["weight_decay"])
     scheduler = OneCycleLR(
@@ -151,11 +174,6 @@ def main() -> None:
 
     run_name = f"{'smoke_' if args.smoke_test else ''}{config['backbone']}_{time.strftime('%Y%m%d-%H%M%S')}"
     writer = SummaryWriter(log_dir=str(project_root / "runs" / run_name))
-
-    out_dir = project_root / config["out_dir"]
-    out_dir.mkdir(parents=True, exist_ok=True)
-    ckpt_name = "smoke_test.pt" if args.smoke_test else "best.pt"
-    ckpt_path = out_dir / ckpt_name
 
     best_val_acc = -1.0
     epochs_without_improvement = 0
