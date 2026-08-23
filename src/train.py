@@ -152,9 +152,13 @@ def main() -> None:
     run_name = f"{'smoke_' if args.smoke_test else ''}{config['backbone']}_{time.strftime('%Y%m%d-%H%M%S')}"
     writer = SummaryWriter(log_dir=str(project_root / "runs" / run_name))
 
+    out_dir = project_root / config["out_dir"]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ckpt_name = "smoke_test.pt" if args.smoke_test else "best.pt"
+    ckpt_path = out_dir / ckpt_name
+
     best_val_acc = -1.0
     epochs_without_improvement = 0
-    best_state = None
 
     for epoch in range(epochs):
         train_loss = train_one_epoch(
@@ -183,6 +187,10 @@ def main() -> None:
                 "val_accuracy": best_val_acc,
                 "epoch": epoch,
             }
+            # Save immediately (not just at the end) so an interrupted run
+            # still leaves the best checkpoint found so far on disk.
+            torch.save(best_state, ckpt_path)
+            print(f"  New best val_accuracy={best_val_acc:.4f} - saved checkpoint to {ckpt_path}")
         else:
             epochs_without_improvement += 1
             if epochs_without_improvement >= config["patience"]:
@@ -190,13 +198,7 @@ def main() -> None:
                 break
 
     writer.close()
-
-    out_dir = project_root / config["out_dir"]
-    out_dir.mkdir(parents=True, exist_ok=True)
-    ckpt_name = "smoke_test.pt" if args.smoke_test else "best.pt"
-    ckpt_path = out_dir / ckpt_name
-    torch.save(best_state, ckpt_path)
-    print(f"Saved checkpoint (val_accuracy={best_state['val_accuracy']:.4f}) to {ckpt_path}")
+    print(f"Training complete. Best val_accuracy={best_val_acc:.4f} saved to {ckpt_path}")
 
 
 if __name__ == "__main__":
