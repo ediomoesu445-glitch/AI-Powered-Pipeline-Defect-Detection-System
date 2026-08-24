@@ -53,7 +53,7 @@ def evaluate_fold(model, loader, criterion, device, use_amp):
     return val_loss, val_acc, val_f1
 
 
-def run_fold(fold_train_items, fold_val_items, config, device, use_amp, epochs, fold_idx):
+def run_fold(fold_train_items, fold_val_items, config, device, use_amp, epochs, fold_idx, fold_ckpt_path):
     train_ds = NEUDataset(fold_train_items, transform=get_train_transform(config["img_size"]))
     val_ds = NEUDataset(fold_val_items, transform=get_eval_transform(config["img_size"]))
 
@@ -73,11 +73,29 @@ def run_fold(fold_train_items, fold_val_items, config, device, use_amp, epochs, 
     )
     scaler = torch.amp.GradScaler(device.type, enabled=use_amp)
 
+    start_epoch = 0
     best_val_acc = -1.0
     best_val_f1 = 0.0
     epochs_without_improvement = 0
 
-    for epoch in range(epochs):
+    # A fold can take well over an hour, longer than this environment has
+    # reliably run background jobs without being killed, so resume from the
+    # last completed epoch within the fold (weights only - the LR schedule
+    # restarts, same accepted tradeoff as src.train's --resume) rather than
+    # only being able to resume whole, already-finished folds.
+    if fold_ckpt_path.exists():
+        state = torch.load(fold_ckpt_path, map_location=device, weights_only=False)
+        model.load_state_dict(state["model_state_dict"])
+        start_epoch = state["epoch"] + 1
+        best_val_acc = state["best_val_acc"]
+        best_val_f1 = state["best_val_f1"]
+        epochs_without_improvement = state["epochs_without_improvement"]
+        print(
+            f"[fold {fold_idx}] Resuming from epoch {start_epoch} "
+            f"(best_val_acc so far={best_val_acc:.4f})"
+        )
+
+    for epoch in range(start_epoch, epochs):
         train_loss = train_one_epoch(
             model, train_loader, optimizer, scheduler, criterion, device, scaler, use_amp
         )
@@ -94,10 +112,25 @@ def run_fold(fold_train_items, fold_val_items, config, device, use_amp, epochs, 
             epochs_without_improvement = 0
         else:
             epochs_without_improvement += 1
-            if epochs_without_improvement >= config["patience"]:
-                print(f"[fold {fold_idx}] Early stopping at epoch {epoch + 1}")
-                break
 
+        # Save every epoch (not just on improvement) so a kill only loses the
+        # current epoch, not the whole fold.
+        torch.save(
+            {
+                "model_state_dict": model.state_dict(),
+                "epoch": epoch,
+                "best_val_acc": best_val_acc,
+                "best_val_f1": best_val_f1,
+                "epochs_without_improvement": epochs_without_improvement,
+            },
+            fold_ckpt_path,
+        )
+
+        if epochs_without_improvement >= config["patience"]:
+            print(f"[fold {fold_idx}] Early stopping at epoch {epoch + 1}")
+            break
+
+    fold_ckpt_path.unlink(missing_ok=True)
     return best_val_acc, best_val_f1
 
 
@@ -143,8 +176,9 @@ def main() -> None:
         fold_val_items = [combined[i] for i in val_idx]
 
         print(f"=== Fold {fold_idx}/{N_FOLDS}: train={len(fold_train_items)} val={len(fold_val_items)} ===")
+        fold_ckpt_path = project_root / config["out_dir"] / f"cv_fold{fold_idx}_inprogress.pt"
         val_acc, val_f1 = run_fold(
-            fold_train_items, fold_val_items, config, device, use_amp, config["epochs"], fold_idx
+            fold_train_items, fold_val_items, config, device, use_amp, config["epochs"], fold_idx, fold_ckpt_path
         )
         results.append({"fold": fold_idx, "val_accuracy": val_acc, "macro_f1": val_f1})
 
