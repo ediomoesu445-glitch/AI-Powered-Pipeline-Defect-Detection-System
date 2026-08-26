@@ -1,0 +1,10 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.13.0+cpu
+torchvision==0.28.0+cpu
+timm==1.0.28
+opencv-python-headless==5.0.0.93
+albumentations==2.0.8
+grad-cam==1.5.7
+gradio==6.25.0
+numpy==2.4.6
+pillow==12.3.0
