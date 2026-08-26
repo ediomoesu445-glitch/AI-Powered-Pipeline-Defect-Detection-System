@@ -207,6 +207,20 @@ def main() -> None:
         # Save after every backbone so an interruption doesn't lose completed ones.
         pd.DataFrame(results).to_csv(results_path, index=False)
 
+        # Persist the trained weights (not just the metrics) - needed to later
+        # run e.g. robustness testing against these same trained backbones.
+        final_ckpt_path = project_root / config["out_dir"] / f"benchmark_{backbone_name}.pt"
+        torch.save(
+            {
+                "model_state_dict": model.state_dict(),
+                "config": {**config, "backbone": backbone_name},
+                "classes": CLASSES,
+                "test_accuracy": test_accuracy,
+            },
+            final_ckpt_path,
+        )
+        print(f"Saved trained weights to {final_ckpt_path}")
+
     results_df = pd.DataFrame(results)
 
     md_path = project_root / "reports" / "benchmark.md"
