@@ -25,10 +25,54 @@ import pandas as pd
 from src.augment import get_eval_transform, get_train_transform
 from src.dataset import CLASSES, NEUDataset, load_splits
 from src.model import build_model
-from src.train import find_project_root, load_config, train_one_epoch
+from src.train import find_project_root, load_config
 from src.utils import set_seed
 
 N_FOLDS = 5
+# This environment has been killing background jobs well before a single
+# epoch (39 batches) can finish, repeatedly losing all of that epoch's
+# progress on resume. Checkpoint every few batches (with full optimizer/
+# scheduler state, not just model weights) so a kill only costs a handful
+# of batches instead of a whole epoch.
+BATCH_CHECKPOINT_INTERVAL = 5
+
+
+def train_one_epoch_resumable(
+    model, loader, optimizer, scheduler, criterion, device, scaler, use_amp, start_batch, checkpoint_fn
+):
+    """Like src.train.train_one_epoch, but skips the first `start_batch`
+    batches (to continue a mid-epoch resume) and calls
+    checkpoint_fn(batch_idx) every BATCH_CHECKPOINT_INTERVAL batches.
+    """
+    model.train()
+    running_loss = 0.0
+    total = 0
+
+    for batch_idx, (images, labels) in enumerate(loader):
+        if batch_idx < start_batch:
+            continue
+
+        images = images.to(device)
+        labels = labels.to(device)
+
+        optimizer.zero_grad()
+        with torch.amp.autocast(device.type, enabled=use_amp):
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+        scheduler.step()
+
+        batch_size = images.size(0)
+        running_loss += loss.item() * batch_size
+        total += batch_size
+
+        if (batch_idx + 1) % BATCH_CHECKPOINT_INTERVAL == 0:
+            checkpoint_fn(batch_idx)
+
+    return running_loss / total if total else 0.0
 
 
 @torch.no_grad()
@@ -74,30 +118,65 @@ def run_fold(fold_train_items, fold_val_items, config, device, use_amp, epochs, 
     scaler = torch.amp.GradScaler(device.type, enabled=use_amp)
 
     start_epoch = 0
+    start_batch = 0
     best_val_acc = -1.0
     best_val_f1 = 0.0
     epochs_without_improvement = 0
+    steps_per_epoch = len(train_loader)
 
     # A fold can take well over an hour, longer than this environment has
-    # reliably run background jobs without being killed, so resume from the
-    # last completed epoch within the fold (weights only - the LR schedule
-    # restarts, same accepted tradeoff as src.train's --resume) rather than
-    # only being able to resume whole, already-finished folds.
+    # reliably run background jobs without being killed, so resume mid-epoch
+    # (weights + optimizer + scheduler state, not just model weights) rather
+    # than only being able to resume from the last fully-completed epoch.
     if fold_ckpt_path.exists():
         state = torch.load(fold_ckpt_path, map_location=device, weights_only=False)
         model.load_state_dict(state["model_state_dict"])
-        start_epoch = state["epoch"] + 1
         best_val_acc = state["best_val_acc"]
         best_val_f1 = state["best_val_f1"]
         epochs_without_improvement = state["epochs_without_improvement"]
+
+        if "optimizer_state_dict" in state:
+            optimizer.load_state_dict(state["optimizer_state_dict"])
+            scheduler.load_state_dict(state["scheduler_state_dict"])
+            scaler.load_state_dict(state["scaler_state_dict"])
+            start_epoch = state["epoch"]
+            start_batch = state["batch"] + 1
+            if start_batch >= steps_per_epoch:
+                start_epoch += 1
+                start_batch = 0
+        else:
+            # Migrating from the older epoch-only checkpoint format (no
+            # optimizer/scheduler state): resume at the start of the next
+            # epoch rather than losing this fold's progress entirely.
+            start_epoch = state["epoch"] + 1
+            start_batch = 0
+
         print(
-            f"[fold {fold_idx}] Resuming from epoch {start_epoch} "
+            f"[fold {fold_idx}] Resuming from epoch {start_epoch + 1}, batch {start_batch} "
             f"(best_val_acc so far={best_val_acc:.4f})"
         )
 
+    def save_checkpoint(epoch: int, batch: int) -> None:
+        torch.save(
+            {
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict(),
+                "scaler_state_dict": scaler.state_dict(),
+                "epoch": epoch,
+                "batch": batch,
+                "best_val_acc": best_val_acc,
+                "best_val_f1": best_val_f1,
+                "epochs_without_improvement": epochs_without_improvement,
+            },
+            fold_ckpt_path,
+        )
+
     for epoch in range(start_epoch, epochs):
-        train_loss = train_one_epoch(
-            model, train_loader, optimizer, scheduler, criterion, device, scaler, use_amp
+        epoch_start_batch = start_batch if epoch == start_epoch else 0
+        train_loss = train_one_epoch_resumable(
+            model, train_loader, optimizer, scheduler, criterion, device, scaler, use_amp,
+            epoch_start_batch, lambda b, e=epoch: save_checkpoint(e, b),
         )
         val_loss, val_acc, val_f1 = evaluate_fold(model, val_loader, criterion, device, use_amp)
 
@@ -113,18 +192,8 @@ def run_fold(fold_train_items, fold_val_items, config, device, use_amp, epochs, 
         else:
             epochs_without_improvement += 1
 
-        # Save every epoch (not just on improvement) so a kill only loses the
-        # current epoch, not the whole fold.
-        torch.save(
-            {
-                "model_state_dict": model.state_dict(),
-                "epoch": epoch,
-                "best_val_acc": best_val_acc,
-                "best_val_f1": best_val_f1,
-                "epochs_without_improvement": epochs_without_improvement,
-            },
-            fold_ckpt_path,
-        )
+        # Mark this epoch fully complete so a resume starts the next epoch.
+        save_checkpoint(epoch, steps_per_epoch - 1)
 
         if epochs_without_improvement >= config["patience"]:
             print(f"[fold {fold_idx}] Early stopping at epoch {epoch + 1}")
