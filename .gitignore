@@ -7,3 +7,5 @@ __pycache__/
 wandb/
 runs/
 .DS_Store
+*.log
+.gradio/

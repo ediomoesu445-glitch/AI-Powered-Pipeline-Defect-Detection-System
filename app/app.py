@@ -148,4 +148,4 @@ def build_demo() -> gr.Blocks:
 
 if __name__ == "__main__":
     demo = build_demo()
-    demo.launch()
+    demo.launch(share=True)

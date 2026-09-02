@@ -12,6 +12,8 @@ for the one final reported number.
 Usage:
     python -m src.cross_validate
 """
+import time
+
 import torch
 import torch.nn as nn
 from sklearn.metrics import f1_score
@@ -157,20 +159,31 @@ def run_fold(fold_train_items, fold_val_items, config, device, use_amp, epochs, 
         )
 
     def save_checkpoint(epoch: int, batch: int) -> None:
-        torch.save(
-            {
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "scheduler_state_dict": scheduler.state_dict(),
-                "scaler_state_dict": scaler.state_dict(),
-                "epoch": epoch,
-                "batch": batch,
-                "best_val_acc": best_val_acc,
-                "best_val_f1": best_val_f1,
-                "epochs_without_improvement": epochs_without_improvement,
-            },
-            fold_ckpt_path,
-        )
+        state = {
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict(),
+            "scaler_state_dict": scaler.state_dict(),
+            "epoch": epoch,
+            "batch": batch,
+            "best_val_acc": best_val_acc,
+            "best_val_f1": best_val_f1,
+            "epochs_without_improvement": epochs_without_improvement,
+        }
+        # This project lives in a OneDrive-synced folder, which transiently
+        # locks a just-written file (Windows sharing violation, WinError 32)
+        # while uploading it. That was crashing the whole training process on
+        # a routine checkpoint save. Retry with backoff instead of losing
+        # hours of progress to a transient file lock.
+        last_err = None
+        for attempt in range(6):
+            try:
+                torch.save(state, fold_ckpt_path)
+                return
+            except (OSError, RuntimeError) as e:
+                last_err = e
+                time.sleep(1.0 * (attempt + 1))
+        raise last_err
 
     for epoch in range(start_epoch, epochs):
         epoch_start_batch = start_batch if epoch == start_epoch else 0
