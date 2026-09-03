@@ -7,7 +7,9 @@ Usage:
 """
 import io
 import os
+import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -41,6 +43,38 @@ N_WARMUP_RUNS = 5
 # that, so a whole epoch's work was being discarded on every restart and the
 # run made no progress at all. Same sub-epoch fix as src.cross_validate.
 BATCH_CHECKPOINT_INTERVAL = 5
+
+
+def inprogress_checkpoint_path(backbone_name: str, project_root: Path, config) -> Path:
+    """Where to keep a backbone's mid-training checkpoint.
+
+    Deliberately OUTSIDE the project directory. The project lives in a
+    OneDrive-synced folder, and rewriting a ~20-100MB checkpoint every few
+    batches makes OneDrive continuously re-sync it; a checkpoint was observed
+    coming back full-size but unreadable ("failed finding central directory")
+    because the sync had rewritten it underneath the training process. Local
+    app data is not synced, so these frequent writes stay off OneDrive's radar.
+
+    Only the mid-training files move. Final per-backbone weights still go to
+    models/ inside the project, where robustness testing expects them - those
+    are written once, not every few batches.
+    """
+    local_root = Path(os.environ.get("LOCALAPPDATA") or tempfile.gettempdir())
+    ckpt_dir = local_root / "neu-defect-benchmark"
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+    path = ckpt_dir / f"benchmark_{backbone_name}_inprogress.pt"
+
+    # Migrate an older in-project checkpoint (e.g. resnet50's completed epochs)
+    # so switching storage location does not throw away existing progress.
+    if not path.exists():
+        legacy = project_root / config["out_dir"] / f"benchmark_{backbone_name}_inprogress.pt"
+        if legacy.exists():
+            try:
+                shutil.copy2(legacy, path)
+                print(f"[{backbone_name}] Migrated in-progress checkpoint out of the synced folder")
+            except OSError as e:
+                print(f"[{backbone_name}] Could not migrate {legacy.name}: {e}")
+    return path
 
 
 def save_checkpoint_resilient(state: dict, path) -> None:
@@ -293,7 +327,7 @@ def main() -> None:
 
         print(f"=== Benchmarking {backbone_name} ===")
         set_seed(config["seed"])
-        ckpt_path = project_root / config["out_dir"] / f"benchmark_{backbone_name}_inprogress.pt"
+        ckpt_path = inprogress_checkpoint_path(backbone_name, project_root, config)
 
         start_time = time.perf_counter()
         model = train_backbone(
