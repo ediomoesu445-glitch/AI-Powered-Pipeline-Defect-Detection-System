@@ -9,3 +9,9 @@ runs/
 .DS_Store
 *.log
 .gradio/
+
+# deploy/ is its own git repo for the Hugging Face Space. Its git metadata is
+# kept out of this repo so the Space's LFS rule for *.pt does not apply to the
+# copy of the checkpoint tracked here as a normal blob.
+deploy/.gitattributes
+deploy/.gitignore
