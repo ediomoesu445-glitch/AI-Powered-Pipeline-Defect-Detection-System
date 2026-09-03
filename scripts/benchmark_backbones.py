@@ -42,7 +42,12 @@ N_WARMUP_RUNS = 5
 # 15-20 min per epoch while this machine kills background jobs in well under
 # that, so a whole epoch's work was being discarded on every restart and the
 # run made no progress at all. Same sub-epoch fix as src.cross_validate.
-BATCH_CHECKPOINT_INTERVAL = 5
+#
+# Two batches rather than five: the heavier backbones were being killed before
+# they could reach even the first checkpoint of an epoch. Frequent writes are
+# cheap now that these files land on local disk instead of the OneDrive-synced
+# project folder (see inprogress_checkpoint_path).
+BATCH_CHECKPOINT_INTERVAL = 2
 
 
 def inprogress_checkpoint_path(backbone_name: str, project_root: Path, config) -> Path:
