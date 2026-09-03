@@ -24,12 +24,72 @@ from torch.utils.data import DataLoader
 from src.augment import get_eval_transform, get_train_transform
 from src.dataset import CLASSES, NEUDataset, load_splits
 from src.model import build_model
-from src.train import evaluate, find_project_root, load_config, train_one_epoch
+from src.train import evaluate, find_project_root, load_config
 from src.utils import set_seed
 
 BACKBONES = ["resnet18", "resnet50", "efficientnet_b0", "mobilenetv3_small_100", "vit_tiny_patch16_224"]
 N_LATENCY_RUNS = 100
 N_WARMUP_RUNS = 5
+# Epoch-level checkpointing is not enough here: the heavier backbones need
+# 15-20 min per epoch while this machine kills background jobs in well under
+# that, so a whole epoch's work was being discarded on every restart and the
+# run made no progress at all. Same sub-epoch fix as src.cross_validate.
+BATCH_CHECKPOINT_INTERVAL = 5
+
+
+def save_checkpoint_resilient(state: dict, path) -> None:
+    """torch.save with retry: this project lives in a OneDrive-synced folder,
+    which transiently locks a just-written file while uploading it (Windows
+    sharing violation, WinError 32). Without the retry that surfaces as a
+    RuntimeError from the zipfile writer and kills the whole run.
+    """
+    last_err = None
+    for attempt in range(6):
+        try:
+            torch.save(state, path)
+            return
+        except (OSError, RuntimeError) as e:
+            last_err = e
+            time.sleep(1.0 * (attempt + 1))
+    raise last_err
+
+
+def train_one_epoch_resumable(
+    model, loader, optimizer, scheduler, criterion, device, scaler, use_amp, start_batch, checkpoint_fn
+):
+    """Like src.train.train_one_epoch, but skips the first `start_batch`
+    batches (mid-epoch resume) and checkpoints every
+    BATCH_CHECKPOINT_INTERVAL batches.
+    """
+    model.train()
+    running_loss = 0.0
+    total = 0
+
+    for batch_idx, (images, labels) in enumerate(loader):
+        if batch_idx < start_batch:
+            continue
+
+        images = images.to(device)
+        labels = labels.to(device)
+
+        optimizer.zero_grad()
+        with torch.amp.autocast(device.type, enabled=use_amp):
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+        scheduler.step()
+
+        batch_size = images.size(0)
+        running_loss += loss.item() * batch_size
+        total += batch_size
+
+        if (batch_idx + 1) % BATCH_CHECKPOINT_INTERVAL == 0:
+            checkpoint_fn(batch_idx)
+
+    return running_loss / total if total else 0.0
 
 
 def count_params(model) -> int:
@@ -84,26 +144,62 @@ def train_backbone(backbone_name, config, train_loader, val_loader, device, use_
     scaler = torch.amp.GradScaler(device.type, enabled=use_amp)
 
     start_epoch = 0
+    start_batch = 0
     best_val_acc = -1.0
     best_state = None
     epochs_without_improvement = 0
+    steps_per_epoch = len(train_loader)
 
-    # This environment has been killing long background jobs unpredictably, so
-    # resume per-epoch within a backbone's training (not just skip a whole
-    # already-finished backbone) - same tradeoff as src.train/src.cross_validate:
-    # weights only, LR schedule restarts, but no completed epochs are wasted.
+    # This environment kills long background jobs well inside a single epoch,
+    # so resume mid-epoch (weights + optimizer + scheduler + scaler state),
+    # not just from the last fully-completed epoch.
     if ckpt_path.exists():
         state = torch.load(ckpt_path, map_location=device, weights_only=False)
         model.load_state_dict(state["model_state_dict"])
-        start_epoch = state["epoch"] + 1
         best_val_acc = state["best_val_acc"]
         best_state = state["model_state_dict"]
         epochs_without_improvement = state["epochs_without_improvement"]
-        print(f"[{backbone_name}] Resuming from epoch {start_epoch} (best_val_acc so far={best_val_acc:.4f})")
+
+        if "optimizer_state_dict" in state:
+            optimizer.load_state_dict(state["optimizer_state_dict"])
+            scheduler.load_state_dict(state["scheduler_state_dict"])
+            scaler.load_state_dict(state["scaler_state_dict"])
+            start_epoch = state["epoch"]
+            start_batch = state["batch"] + 1
+            if start_batch >= steps_per_epoch:
+                start_epoch += 1
+                start_batch = 0
+        else:
+            # Older epoch-only checkpoint format: resume at the next epoch
+            # rather than discarding this backbone's progress entirely.
+            start_epoch = state["epoch"] + 1
+            start_batch = 0
+
+        print(
+            f"[{backbone_name}] Resuming from epoch {start_epoch + 1}, batch {start_batch} "
+            f"(best_val_acc so far={best_val_acc:.4f})"
+        )
+
+    def save_progress(epoch: int, batch: int) -> None:
+        save_checkpoint_resilient(
+            {
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict(),
+                "scaler_state_dict": scaler.state_dict(),
+                "epoch": epoch,
+                "batch": batch,
+                "best_val_acc": best_val_acc,
+                "epochs_without_improvement": epochs_without_improvement,
+            },
+            ckpt_path,
+        )
 
     for epoch in range(start_epoch, epochs):
-        train_loss = train_one_epoch(
-            model, train_loader, optimizer, scheduler, criterion, device, scaler, use_amp
+        epoch_start_batch = start_batch if epoch == start_epoch else 0
+        train_loss = train_one_epoch_resumable(
+            model, train_loader, optimizer, scheduler, criterion, device, scaler, use_amp,
+            epoch_start_batch, lambda b, e=epoch: save_progress(e, b),
         )
         val_loss, val_acc = evaluate(model, val_loader, criterion, device, use_amp)
         print(
@@ -118,15 +214,8 @@ def train_backbone(backbone_name, config, train_loader, val_loader, device, use_
         else:
             epochs_without_improvement += 1
 
-        torch.save(
-            {
-                "model_state_dict": model.state_dict(),
-                "epoch": epoch,
-                "best_val_acc": best_val_acc,
-                "epochs_without_improvement": epochs_without_improvement,
-            },
-            ckpt_path,
-        )
+        # Mark this epoch fully complete so a resume starts the next one.
+        save_progress(epoch, steps_per_epoch - 1)
 
         if epochs_without_improvement >= config["patience"]:
             print(f"[{backbone_name}] Early stopping at epoch {epoch + 1}")
