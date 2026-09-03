@@ -33,6 +33,8 @@ from src.utils import set_seed
 
 SEVERITIES = ["mild", "moderate", "severe"]
 SEVERITY_LEVEL = {"mild": 1, "moderate": 2, "severe": 3}
+# 7 corruptions x 3 severities, plus the clean baseline.
+TOTAL_GRID_CELLS = 22
 
 
 def motion_blur(img: np.ndarray, severity: int) -> np.ndarray:
@@ -140,22 +142,41 @@ def load_checkpoint_model(ckpt_path, device):
     return model, config
 
 
-def run_robustness_grid(model, test_items, img_size, device):
+def run_robustness_grid(model, test_items, img_size, device, done_cells=frozenset(), on_row=None):
+    """Evaluate the 7x3 corruption grid plus a clean baseline.
+
+    A full grid is 22 evaluations over the test set. This environment kills
+    long jobs well before that finishes, and the whole grid used to be
+    discarded on every kill because results were only persisted once a
+    backbone completed. So skip cells already recorded (done_cells) and hand
+    each finished row to on_row for immediate persistence.
+    """
     rows = []
 
-    clean_ds = CorruptedNEUDataset(test_items, img_size)
-    clean_acc, clean_f1 = evaluate_dataset(model, clean_ds, device)
-    rows.append({"corruption": "clean", "severity": "none", "accuracy": clean_acc, "macro_f1": clean_f1})
-    print(f"  clean baseline: accuracy={clean_acc:.4f} macro_f1={clean_f1:.4f}")
+    def record(corruption, severity, acc, f1):
+        row = {"corruption": corruption, "severity": severity, "accuracy": acc, "macro_f1": f1}
+        rows.append(row)
+        if on_row is not None:
+            on_row(row)
+
+    if ("clean", "none") in done_cells:
+        print("  clean baseline: already recorded, skipping")
+    else:
+        clean_ds = CorruptedNEUDataset(test_items, img_size)
+        clean_acc, clean_f1 = evaluate_dataset(model, clean_ds, device)
+        record("clean", "none", clean_acc, clean_f1)
+        print(f"  clean baseline: accuracy={clean_acc:.4f} macro_f1={clean_f1:.4f}")
 
     for corruption_name, corruption_fn in CORRUPTIONS.items():
         for severity in SEVERITIES:
+            if (corruption_name, severity) in done_cells:
+                continue
             ds = CorruptedNEUDataset(test_items, img_size, corruption_fn, severity)
             acc, f1 = evaluate_dataset(model, ds, device)
-            rows.append({"corruption": corruption_name, "severity": severity, "accuracy": acc, "macro_f1": f1})
+            record(corruption_name, severity, acc, f1)
             print(f"  {corruption_name} ({severity}): accuracy={acc:.4f} macro_f1={f1:.4f}")
 
-    return rows, clean_acc
+    return rows
 
 
 def save_examples_figure(test_items, out_path, severity: str = "severe"):
@@ -227,25 +248,39 @@ def main() -> None:
             "results to also test the top 3 backbones."
         )
 
-    # Resume: skip backbones whose full grid is already in robustness.csv.
+    # Resume at cell granularity, not backbone granularity: a full grid is 22
+    # evaluations over the test set, and this environment kills the job well
+    # before that, so resuming per-backbone meant the same partial grid was
+    # recomputed and discarded indefinitely.
     all_results = []
-    done_backbones = set()
+    done_cells = {}
     if results_path.exists():
         existing_df = pd.read_csv(results_path)
         all_results = existing_df.to_dict("records")
-        done_backbones = set(existing_df["backbone"].unique())
-        if done_backbones:
-            print(f"Resuming: skipping already-tested backbone(s) {sorted(done_backbones)}")
+        for row in all_results:
+            done_cells.setdefault(row["backbone"], set()).add((row["corruption"], row["severity"]))
+        complete = [n for n, cells in done_cells.items() if len(cells) >= TOTAL_GRID_CELLS]
+        partial = {n: len(c) for n, c in done_cells.items() if len(c) < TOTAL_GRID_CELLS}
+        if complete:
+            print(f"Resuming: already complete {sorted(complete)}")
+        if partial:
+            print(f"Resuming: partial grids {partial} (of {TOTAL_GRID_CELLS} cells)")
+
+    def summarise(name):
+        rows = [r for r in all_results if r["backbone"] == name]
+        clean_rows = [r for r in rows if r["corruption"] == "clean"]
+        corrupted = [r["accuracy"] for r in rows if r["corruption"] != "clean"]
+        if not clean_rows or not corrupted:
+            return None
+        return clean_rows[0]["accuracy"] - (sum(corrupted) / len(corrupted))
 
     summary = []
     for name, ckpt_path in checkpoints_to_test:
-        if name in done_backbones:
-            rows = [r for r in all_results if r["backbone"] == name]
-            clean_rows = [r for r in rows if r["corruption"] == "clean"]
-            corrupted = [r["accuracy"] for r in rows if r["corruption"] != "clean"]
-            if clean_rows and corrupted:
-                mean_drop = clean_rows[0]["accuracy"] - (sum(corrupted) / len(corrupted))
-                summary.append((name, mean_drop))
+        cells = done_cells.get(name, set())
+        if len(cells) >= TOTAL_GRID_CELLS:
+            drop = summarise(name)
+            if drop is not None:
+                summary.append((name, drop))
             continue
 
         if not ckpt_path.exists():
@@ -254,19 +289,23 @@ def main() -> None:
 
         print(f"=== Robustness testing {name} ({ckpt_path.name}) ===")
         model, model_config = load_checkpoint_model(ckpt_path, device)
-        rows, clean_acc = run_robustness_grid(model, test_items, model_config["img_size"], device)
 
-        for row in rows:
-            row["backbone"] = name
-        all_results.extend(rows)
-        pd.DataFrame(all_results).to_csv(results_path, index=False)
+        def persist(row, backbone=name):
+            row["backbone"] = backbone
+            all_results.append(row)
+            pd.DataFrame(all_results).to_csv(results_path, index=False)
 
-        corrupted_accs = [r["accuracy"] for r in rows if r["corruption"] != "clean"]
-        mean_drop = clean_acc - (sum(corrupted_accs) / len(corrupted_accs))
-        summary.append((name, mean_drop))
-        print(f"{name}: mean corruption accuracy drop = {mean_drop:.4f}")
+        run_robustness_grid(
+            model, test_items, model_config["img_size"], device,
+            done_cells=cells, on_row=persist,
+        )
 
-        backbone_df = pd.DataFrame(rows)
+        drop = summarise(name)
+        if drop is not None:
+            summary.append((name, drop))
+            print(f"{name}: mean corruption accuracy drop = {drop:.4f}")
+
+        backbone_df = pd.DataFrame([r for r in all_results if r["backbone"] == name])
         save_heatmap(backbone_df, name, fig_dir / f"robustness_heatmap_{name}.png")
         if name == checkpoints_to_test[0][0]:
             save_heatmap(backbone_df, name, fig_dir / "robustness_heatmap.png")
