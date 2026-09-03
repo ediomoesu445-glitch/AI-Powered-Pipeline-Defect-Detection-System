@@ -27,7 +27,12 @@ from src.model import build_model
 from src.train import evaluate, find_project_root, load_config
 from src.utils import set_seed
 
-BACKBONES = ["resnet18", "resnet50", "efficientnet_b0", "mobilenetv3_small_100", "vit_tiny_patch16_224"]
+# Ordered lightest-first. Each backbone trains independently from pretrained
+# weights on the same frozen split with identical hyperparameters, so the order
+# does not affect any reported number - but on a memory-constrained machine that
+# kills jobs within a minute, the lighter models are the ones that can actually
+# finish, and efficientnet_b0 is the backbone the cited robustness claim is about.
+BACKBONES = ["resnet18", "mobilenetv3_small_100", "efficientnet_b0", "resnet50", "vit_tiny_patch16_224"]
 N_LATENCY_RUNS = 100
 N_WARMUP_RUNS = 5
 # Epoch-level checkpointing is not enough here: the heavier backbones need
