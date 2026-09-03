@@ -6,6 +6,7 @@ Usage:
     python -m scripts.benchmark_backbones
 """
 import io
+import os
 import sys
 import time
 from pathlib import Path
@@ -43,19 +44,32 @@ BATCH_CHECKPOINT_INTERVAL = 5
 
 
 def save_checkpoint_resilient(state: dict, path) -> None:
-    """torch.save with retry: this project lives in a OneDrive-synced folder,
-    which transiently locks a just-written file while uploading it (Windows
-    sharing violation, WinError 32). Without the retry that surfaces as a
-    RuntimeError from the zipfile writer and kills the whole run.
+    """Checkpoint atomically, with retry.
+
+    Two hazards this guards against, both observed on this machine:
+
+    - The project lives in a OneDrive-synced folder, which transiently locks a
+      just-written file while uploading it (Windows sharing violation,
+      WinError 32). Unretried, that surfaces as a RuntimeError from the
+      zipfile writer and kills the whole run.
+    - Jobs here are killed frequently and without warning. Writing straight to
+      the checkpoint path means a kill landing mid-write leaves a truncated,
+      unloadable file, which would then break every subsequent resume. So
+      write to a temporary file first and os.replace() it into place, which is
+      atomic on the same volume: the real checkpoint is either the previous
+      good one or the new complete one, never a partial write.
     """
+    tmp_path = Path(str(path) + ".tmp")
     last_err = None
     for attempt in range(6):
         try:
-            torch.save(state, path)
+            torch.save(state, tmp_path)
+            os.replace(tmp_path, path)
             return
         except (OSError, RuntimeError) as e:
             last_err = e
             time.sleep(1.0 * (attempt + 1))
+    tmp_path.unlink(missing_ok=True)
     raise last_err
 
 
@@ -158,8 +172,18 @@ def train_backbone(backbone_name, config, train_loader, val_loader, device, use_
     # This environment kills long background jobs well inside a single epoch,
     # so resume mid-epoch (weights + optimizer + scheduler + scaler state),
     # not just from the last fully-completed epoch.
+    state = None
     if ckpt_path.exists():
-        state = torch.load(ckpt_path, map_location=device, weights_only=False)
+        try:
+            state = torch.load(ckpt_path, map_location=device, weights_only=False)
+        except Exception as e:
+            # A checkpoint truncated by a kill mid-write (possible before saves
+            # became atomic) must not crash every subsequent restart. Discard it
+            # and retrain this backbone from pretrained weights.
+            print(f"[{backbone_name}] Ignoring unreadable checkpoint {ckpt_path.name}: {e}")
+            ckpt_path.unlink(missing_ok=True)
+
+    if state is not None:
         model.load_state_dict(state["model_state_dict"])
         best_val_acc = state["best_val_acc"]
         best_state = state["model_state_dict"]
