@@ -140,7 +140,7 @@ Source: [`reports/benchmark.csv`](reports/benchmark.csv)
 | Backbone | Test accuracy | Macro F1 | Parameters | Size (MB) | CPU latency (ms) | Train time (min) |
 |---|---|---|---|---|---|---|
 | resnet18 | 0.9963 | 0.9963 | 11,179,590 | 42.72 | 162.27 | 245.61 |
-| mobilenetv3_small_100 | 1.0000 | 1.0000 | 1,524,006 | 5.94 | 397.39 | 131.34 |
+| mobilenetv3_small_100 | 1.0000 | 1.0000 | 1,524,006 | 5.94 | 210.76 | 149.00 |
 | efficientnet_b0 | TODO | TODO | TODO | TODO | TODO | TODO |
 | resnet50 | TODO | TODO | TODO | TODO | TODO | TODO |
 | vit_tiny_patch16_224 | TODO | TODO | TODO | TODO | TODO | TODO |
@@ -153,29 +153,33 @@ these rows — the script skips backbones already present in `reports/benchmark.
 
 **The one comparison available is counterintuitive and worth stating.** MobileNetV3-Small has
 7.3× fewer parameters and is 7.2× smaller on disk than ResNet18, yet its **CPU inference latency
-is 2.4× worse** (397.39 ms vs 162.27 ms). The likely cause is that MobileNetV3's
+is 1.3× worse** (210.76 ms vs 162.27 ms). The likely cause is that MobileNetV3's
 depthwise-separable convolutions are designed for mobile NPUs and ARM inference, whereas on
 desktop x86 PyTorch's CPU kernels are far better optimised for ResNet's dense convolutions.
 **Parameter count is not a proxy for latency on the target hardware** — which is the practical
 lesson, since model choice for an edge deployment is often made on parameter count alone.
 
-Two caveats on this table, both important:
+Three caveats on this table, all material to how much weight it can carry:
 
 - **The accuracy difference is not meaningful.** 1.0000 versus 0.9963 on a 270-image test set is a
   single image. Both models are saturated on clean data; this table cannot separate them on
   accuracy, and Section 6 argues corruption robustness is the more informative axis anyway.
-- **MobileNetV3 was trained twice, and the runs disagreed.** Through an operator error, two
-  training processes ran concurrently; the recorded run (131.34 min, accuracy 1.0000) supersedes
-  an earlier run that early-stopped sooner (37.69 min, accuracy 0.9407). The table reports the run
-  currently in `reports/benchmark.csv`. That a shorter run of the same architecture on the same
-  frozen split landed 5.6 points lower is itself a caution: with 1,800 images, results are
-  sensitive to how long training runs before early stopping, and single-run comparisons between
-  backbones should be treated as indicative rather than definitive.
+- **The latency figures are noisy.** They were measured on a heavily contended machine, and
+  repeated measurements of the same MobileNetV3 checkpoint ranged from 210.76 ms to 501.68 ms
+  across runs. The reported value is the one in `reports/benchmark.csv`. The direction of the
+  result (MobileNetV3 slower than ResNet18 on x86 CPU) held in every measurement, but the
+  magnitude should not be quoted precisely.
+- **MobileNetV3's training was repeated.** Through an operator error, multiple benchmark processes
+  ran concurrently and re-trained it, each overwriting the row. An earlier run early-stopped
+  sooner (37.69 min) and reached 0.9407 accuracy. That a shorter run of the same architecture on
+  the same frozen split landed 5.6 points lower is a caution in itself: with 1,800 images results
+  are sensitive to how long training continues before early stopping, and single-run comparisons
+  between backbones are indicative, not definitive.
 
-For CPU deployment on x86, ResNet18 remains the safer default on latency, which is the axis the
-two models genuinely differ on. MobileNetV3 is preferable where storage or memory is the binding
-constraint, and its latency ranking would likely invert on ARM hardware — untested here, and worth
-measuring on the actual target device before any deployment decision.
+For CPU deployment on x86, ResNet18 remains the safer default on latency, which is the only axis
+these two models measurably differ on. MobileNetV3 is preferable where storage or memory is the
+binding constraint, and its latency ranking would plausibly invert on ARM hardware — untested
+here, and worth measuring on the actual target device before any deployment decision.
 
 ## 6. Robustness analysis
 
