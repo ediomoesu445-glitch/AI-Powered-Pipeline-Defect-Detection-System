@@ -140,16 +140,42 @@ Source: [`reports/benchmark.csv`](reports/benchmark.csv)
 | Backbone | Test accuracy | Macro F1 | Parameters | Size (MB) | CPU latency (ms) | Train time (min) |
 |---|---|---|---|---|---|---|
 | resnet18 | 0.9963 | 0.9963 | 11,179,590 | 42.72 | 162.27 | 245.61 |
-| resnet50 | TODO | TODO | TODO | TODO | TODO | TODO |
+| mobilenetv3_small_100 | 1.0000 | 1.0000 | 1,524,006 | 5.94 | 397.39 | 131.34 |
 | efficientnet_b0 | TODO | TODO | TODO | TODO | TODO | TODO |
-| mobilenetv3_small_100 | TODO | TODO | TODO | TODO | TODO | TODO |
+| resnet50 | TODO | TODO | TODO | TODO | TODO | TODO |
 | vit_tiny_patch16_224 | TODO | TODO | TODO | TODO | TODO | TODO |
 
-**TODO:** Only ResNet18 has completed benchmarking. The remaining four backbones in
-`scripts/benchmark_backbones.py` have not finished (ResNet18 alone required 245.61 minutes on the
-development machine). Until they complete, no cross-backbone accuracy, latency, or
-parameter-efficiency comparison is available, and no deployment recommendation between backbones
-is made here.
+**TODO:** Three of five backbones are unbenchmarked. On the development machine (8 GB RAM, CPU
+only) the training process was repeatedly terminated by memory pressure; EfficientNetB0 and
+ResNet50 could not complete enough consecutive work to make progress, and ViT-Tiny was not
+started. Running `python -m scripts.benchmark_backbones` on a machine with more memory would fill
+these rows — the script skips backbones already present in `reports/benchmark.csv`.
+
+**The one comparison available is counterintuitive and worth stating.** MobileNetV3-Small has
+7.3× fewer parameters and is 7.2× smaller on disk than ResNet18, yet its **CPU inference latency
+is 2.4× worse** (397.39 ms vs 162.27 ms). The likely cause is that MobileNetV3's
+depthwise-separable convolutions are designed for mobile NPUs and ARM inference, whereas on
+desktop x86 PyTorch's CPU kernels are far better optimised for ResNet's dense convolutions.
+**Parameter count is not a proxy for latency on the target hardware** — which is the practical
+lesson, since model choice for an edge deployment is often made on parameter count alone.
+
+Two caveats on this table, both important:
+
+- **The accuracy difference is not meaningful.** 1.0000 versus 0.9963 on a 270-image test set is a
+  single image. Both models are saturated on clean data; this table cannot separate them on
+  accuracy, and Section 6 argues corruption robustness is the more informative axis anyway.
+- **MobileNetV3 was trained twice, and the runs disagreed.** Through an operator error, two
+  training processes ran concurrently; the recorded run (131.34 min, accuracy 1.0000) supersedes
+  an earlier run that early-stopped sooner (37.69 min, accuracy 0.9407). The table reports the run
+  currently in `reports/benchmark.csv`. That a shorter run of the same architecture on the same
+  frozen split landed 5.6 points lower is itself a caution: with 1,800 images, results are
+  sensitive to how long training runs before early stopping, and single-run comparisons between
+  backbones should be treated as indicative rather than definitive.
+
+For CPU deployment on x86, ResNet18 remains the safer default on latency, which is the axis the
+two models genuinely differ on. MobileNetV3 is preferable where storage or memory is the binding
+constraint, and its latency ranking would likely invert on ARM hardware — untested here, and worth
+measuring on the actual target device before any deployment decision.
 
 ## 6. Robustness analysis
 
@@ -228,11 +254,18 @@ EfficientNetB0 the most resilient among the backbones they compared.
 67.83% mean corrupted accuracy — the in-distribution figure does not transfer.
 
 **Their specific EfficientNetB0 claim cannot be evaluated here: TODO.** That claim is comparative
-across backbones, and `efficientnet_b0` has not been trained in this project. `reports/robustness.csv`
-contains results for `resnet18_primary` only. Confirming or contradicting it requires completing
-`scripts/benchmark_backbones.py` and re-running `scripts/robustness_test.py`, which is already
-written to pick up the top three benchmarked backbones automatically. No claim is made here about
-which backbone degrades least.
+across backbones, and `efficientnet_b0` could not be trained to completion on the development
+machine (see Section 5). `reports/robustness.csv` contains results for `resnet18_primary` only.
+
+A cross-backbone comparison against MobileNetV3-Small was attempted but also could not complete:
+each corruption cell is a full 270-image test-set evaluation, and the process was terminated
+during startup before finishing one. Both scripts resume from partial progress
+(`scripts/robustness_test.py` records each grid cell as it completes, and skips cells already
+present), so running them on a machine with more memory would fill this in without repeating
+finished work.
+
+**No claim is made here about which backbone degrades least**, and the cited EfficientNetB0
+finding is neither confirmed nor contradicted by this project.
 
 ## 7. Explainability
 
@@ -322,8 +355,14 @@ decision-making.
   Section 6's severe-corruption results show this failure mode directly.
 - **Single-label, whole-image.** No detection, no segmentation, no multiple defects per image, no
   defect sizing.
-- **Benchmark incomplete.** Four of five backbones unfinished (Section 5).
-- **Robustness tested on one backbone.** Cross-backbone robustness comparison is TODO (Section 6).
+- **Benchmark incomplete.** Three of five backbones unfinished (Section 5), limited by the
+  development machine rather than by method.
+- **Robustness tested on one backbone.** The corruption analysis covers `resnet18_primary` only;
+  the cross-backbone comparison and the cited EfficientNetB0 resilience claim remain TODO
+  (Section 6).
+- **Latency measured on one machine.** All CPU latency figures come from a single desktop x86
+  machine. As Section 5 shows, relative latency between architectures can invert on different
+  hardware, so these numbers should not be used to choose a backbone for a different target.
 
 ## 9. Reproduce it
 
