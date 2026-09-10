@@ -9,6 +9,35 @@ URL exists yet. See [Reproduce it](#9-reproduce-it) to run the demo locally.
 
 ---
 
+## Project status
+
+The classification pipeline is complete and validated end to end. The comparative
+backbone study is partial, for reasons of available compute rather than method.
+
+| Area | Status |
+|---|---|
+| Data pipeline, leakage-controlled splits | Complete |
+| Training, evaluation, ONNX export | Complete |
+| 5-fold cross-validation | Complete — 0.9987 ± 0.0029 |
+| Held-out test evaluation | Complete — 0.9963 accuracy |
+| Corruption robustness (ResNet18) | Complete — 22-cell grid, 31.80 pp mean drop |
+| Grad-CAM explainability incl. failures | Complete |
+| Gradio demo + Spaces bundle | Complete; Space not yet published |
+| Backbone benchmark | **Partial — 2 of 5** (Section 5) |
+| Cross-backbone robustness comparison | **Not done** (Section 6) |
+| Unseen-defect anomaly detection | Not started — out of scope for this iteration |
+
+The unfinished items were run on an 8 GB CPU-only laptop, where the heavier backbones could not
+complete enough consecutive training to make progress. This is a hardware limit, not a
+methodological one: `configs/splits.json` is committed so splits are identical across machines,
+and both `scripts/benchmark_backbones.py` and `scripts/robustness_test.py` resume from partial
+progress, so re-running either elsewhere fills in the gaps without repeating finished work.
+
+Every figure reported below comes from a file in [`reports/`](reports/). Where a number was not
+measured it is marked TODO rather than estimated.
+
+---
+
 ## 1. What this is
 
 A ResNet18 classifier that assigns a steel surface image to one of six defect classes
