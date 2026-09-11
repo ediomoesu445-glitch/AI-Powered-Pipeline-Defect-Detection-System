@@ -1,6 +1,8 @@
 data/
 models/*.pt
 !models/best.pt
+# ONNX export is a derived artifact; regenerate with src.export rather than committing it.
+models/*.onnx
 __pycache__/
 .venv/
 *.ipynb_checkpoints
