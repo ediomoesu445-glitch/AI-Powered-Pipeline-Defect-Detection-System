@@ -1,0 +1,11 @@
+backbone: resnet18
+img_size: 224
+batch_size: 32
+epochs: 30
+lr: 0.0003
+weight_decay: 0.01
+label_smoothing: 0.1
+patience: 5
+seed: 42
+data_root: data/raw
+out_dir: models
