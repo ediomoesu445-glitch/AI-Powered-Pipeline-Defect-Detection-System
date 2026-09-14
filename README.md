@@ -3,7 +3,7 @@
 A six-class surface-defect image classifier (NEU dataset) built as a proof-of-concept for the
 visual-inspection layer of a pipeline-integrity workflow.
 
-**Live demo:** TODO — not yet deployed to Hugging Face Spaces. The deployment bundle is prepared
+**Live demo:** TODO, not yet deployed to Hugging Face Spaces. The deployment bundle is prepared
 and verified in [`deploy/`](deploy/), but the Space has not been created or pushed, so no permanent
 URL exists yet. See [Reproduce it](#9-reproduce-it) to run the demo locally.
 
@@ -18,14 +18,14 @@ backbone study is partial, for reasons of available compute rather than method.
 |---|---|
 | Data pipeline, leakage-controlled splits | Complete |
 | Training, evaluation, ONNX export | Complete |
-| 5-fold cross-validation | Complete — 0.9987 ± 0.0029 |
-| Held-out test evaluation | Complete — 0.9963 accuracy |
-| Corruption robustness (ResNet18) | Complete — 22-cell grid, 31.80 pp mean drop |
+| 5-fold cross-validation | Complete: 0.9987 ± 0.0029 |
+| Held-out test evaluation | Complete: 0.9963 accuracy |
+| Corruption robustness (ResNet18) | Complete: 22-cell grid, 31.80 pp mean drop |
 | Grad-CAM explainability incl. failures | Complete |
 | Gradio demo + Spaces bundle | Complete; Space not yet published |
-| Backbone benchmark | **Partial — 2 of 5** (Section 5) |
+| Backbone benchmark | **Partial: 2 of 5** (Section 5) |
 | Cross-backbone robustness comparison | **Not done** (Section 6) |
-| Unseen-defect anomaly detection | Not started — out of scope for this iteration |
+| Unseen-defect anomaly detection | Not started; out of scope for this iteration |
 
 The unfinished items were run on an 8 GB CPU-only laptop, where the heavier backbones could not
 complete enough consecutive training to make progress. This is a hardware limit, not a
@@ -44,15 +44,15 @@ A ResNet18 classifier that assigns a steel surface image to one of six defect cl
 (`crazing`, `inclusion`, `patches`, `pitted_surface`, `rolled-in_scale`, `scratches`), with
 Grad-CAM saliency overlays and a corruption-robustness evaluation.
 
-The intended contribution is not the headline accuracy — the dataset is small and clean enough
+The intended contribution is not the headline accuracy; the dataset is small and clean enough
 that high accuracy is expected. It is the **measured gap between clean-image accuracy and
 accuracy under simulated field-imaging conditions**, which is reported in
 [Section 6](#6-robustness-analysis).
 
 ## 2. Problem framing
 
-Pipeline integrity management uses several inspection modalities. In-line inspection (ILI) tools —
-magnetic flux leakage (MFL) and ultrasonic testing (UT) — measure wall loss, cracking, and
+Pipeline integrity management uses several inspection modalities. In-line inspection (ILI) tools
+such as magnetic flux leakage (MFL) and ultrasonic testing (UT) measure wall loss, cracking, and
 metal-loss geometry from inside the line. These are the authoritative sources for wall-thickness
 and defect-depth assessment.
 
@@ -69,7 +69,7 @@ workflow; MFL/UT remain the basis for integrity assessment.
 
 ## 3. Dataset
 
-**NEU Surface Defect Database** — hot-rolled steel strip surface defects.
+**NEU Surface Defect Database**: hot-rolled steel strip surface defects.
 
 | Property | Value |
 |---|---|
@@ -94,7 +94,7 @@ cross-validation. The 5-fold cross-validation in Section 5 runs over the combine
 only (1,530 images).
 
 **Citation:** Song, K. and Yan, Y. (2013). A noise robust method based on completed local binary
-patterns for hot-rolled steel strip surface defects. *Applied Surface Science*, 285: 858–864.
+patterns for hot-rolled steel strip surface defects. *Applied Surface Science*, 285: 858-864.
 
 ## 4. Method
 
@@ -107,7 +107,7 @@ with label smoothing 0.1, batch size 32, max 30 epochs, early stopping with pati
 warmup, then full fine-tuning with discriminative learning rates). The shipped checkpoint
 (`models/best.pt`) records best validation accuracy 1.0000 at epoch 11.
 
-**Augmentation** (`src/augment.py`, Albumentations 2.0.8) — applied to the training split only;
+**Augmentation** (`src/augment.py`, Albumentations 2.0.8) is applied to the training split only;
 validation and test use resize + normalize with no augmentation:
 
 - *Applied:* horizontal/vertical flip and 90° rotation (surface texture has no canonical
@@ -178,14 +178,14 @@ Source: [`reports/benchmark.csv`](reports/benchmark.csv)
 only) the training process was repeatedly terminated by memory pressure; EfficientNetB0 and
 ResNet50 could not complete enough consecutive work to make progress, and ViT-Tiny was not
 started. Running `python -m scripts.benchmark_backbones` on a machine with more memory would fill
-these rows — the script skips backbones already present in `reports/benchmark.csv`.
+these rows; the script skips backbones already present in `reports/benchmark.csv`.
 
 **The one comparison available is counterintuitive and worth stating.** MobileNetV3-Small has
 7.3× fewer parameters and is 7.2× smaller on disk than ResNet18, yet its **CPU inference latency
 is 1.3× worse** (210.76 ms vs 162.27 ms). The likely cause is that MobileNetV3's
 depthwise-separable convolutions are designed for mobile NPUs and ARM inference, whereas on
 desktop x86 PyTorch's CPU kernels are far better optimised for ResNet's dense convolutions.
-**Parameter count is not a proxy for latency on the target hardware** — which is the practical
+**Parameter count is not a proxy for latency on the target hardware.** That is the practical
 lesson, since model choice for an edge deployment is often made on parameter count alone.
 
 Three caveats on this table, all material to how much weight it can carry:
@@ -207,8 +207,8 @@ Three caveats on this table, all material to how much weight it can carry:
 
 For CPU deployment on x86, ResNet18 remains the safer default on latency, which is the only axis
 these two models measurably differ on. MobileNetV3 is preferable where storage or memory is the
-binding constraint, and its latency ranking would plausibly invert on ARM hardware — untested
-here, and worth measuring on the actual target device before any deployment decision.
+binding constraint, and its latency ranking would plausibly invert on ARM hardware, though that
+is untested here and worth measuring on the actual target device before any deployment decision.
 
 ## 6. Robustness analysis
 
@@ -260,7 +260,7 @@ By corruption type (averaged over severities, worst first):
 
 A model that is effectively saturated on clean test data (99.63%, one error in 270) loses roughly
 a third of its accuracy on average across simulated field conditions, and drops to 42.96% at
-severe corruption — approaching the range where predictions carry little information for a
+severe corruption, approaching the range where predictions carry little information for a
 six-class problem.
 
 The failure profile is specific and actionable:
@@ -279,12 +279,12 @@ field performance, and capture quality control is a first-order concern for any 
 
 ### Comparison with published work
 
-Olorunnisola & Oluwatimilehin (*Int. J. Adv. Manuf. Technol.* 143:2545–2558, 2026) report that
+Olorunnisola & Oluwatimilehin (*Int. J. Adv. Manuf. Technol.* 143:2545-2558, 2026) report that
 models scoring 100% in-distribution on this dataset can be fragile out-of-distribution, and find
 EfficientNetB0 the most resilient among the backbones they compared.
 
 **Our result agrees with the general finding.** A model at 99.63% clean accuracy degrades to
-67.83% mean corrupted accuracy — the in-distribution figure does not transfer.
+67.83% mean corrupted accuracy; the in-distribution figure does not transfer.
 
 **Their specific EfficientNetB0 claim cannot be evaluated here: TODO.** That claim is comparative
 across backbones, and `efficientnet_b0` could not be trained to completion on the development
@@ -308,7 +308,7 @@ Grad-CAM overlays showing which image regions drive each prediction.
 
 ![Grad-CAM by class](reports/figures/gradcam_by_class.png)
 
-**Failure cases** — the misclassified and lowest-confidence examples:
+**Failure cases**, the misclassified and lowest-confidence examples:
 
 ![Grad-CAM failures](reports/figures/gradcam_failures.png)
 ![Worst predictions](reports/figures/worst_predictions.png)
@@ -319,7 +319,7 @@ Grad-CAM overlays showing which image regions drive each prediction.
 
 The failure figures are included deliberately. On correctly classified images the saliency
 generally covers the defect region; on failures it is more diffuse or attends to background
-texture. Grad-CAM here is a debugging and review aid, not a validated defect-localisation output —
+texture. Grad-CAM here is a debugging and review aid, not a validated defect-localisation output;
 it produces no bounding box, area, or depth measurement.
 
 ## 8. Scope, limitations, and path to real pipeline data
@@ -336,8 +336,8 @@ training, validation, or test set came from an operating pipeline.
 ### What the defect classes do and do not mean
 
 The six NEU classes are steel-strip manufacturing defect categories. They have *analogues* in
-pipeline integrity vocabulary — `crazing` resembles the surface presentation of stress-corrosion
-cracking, `pitted_surface` resembles pitting corrosion — but they are **not the same taxonomy**.
+pipeline integrity vocabulary. `crazing` resembles the surface presentation of stress-corrosion
+cracking and `pitted_surface` resembles pitting corrosion, but they are **not the same taxonomy**.
 The plain-English descriptions in the demo app are explanatory analogies for a non-specialist
 audience, not an assessment mapping. A model trained on these labels does not detect
 stress-corrosion cracking or pitting corrosion on a pipeline.
@@ -356,8 +356,8 @@ real pipeline visual dataset. **The trained weights would not.**
    imagery, labelled by qualified inspectors against an operator-approved defect taxonomy. This is
    the single largest cost and the binding constraint.
 2. **Domain adaptation or retraining.** The lab-to-field gap measured in Section 6 is for
-   *simulated* corruption of lab images. The real domain gap — different surfaces, coatings,
-   lighting, scale, backgrounds, weather — is larger and is not measured anywhere in this
+   *simulated* corruption of lab images. The real domain gap (different surfaces, coatings,
+   lighting, scale, backgrounds, weather) is larger and is not measured anywhere in this
    repository.
 3. **Capture quality control.** Section 6 shows motion blur and overexposure are the dominant
    failure modes. Any deployment needs capture standards and automatic rejection of unusable
@@ -381,7 +381,7 @@ decision-making.
 
 - **Small dataset.** 1,800 images, 270 in test. A single test error moves accuracy by 0.37
   percentage points; treat differences smaller than that as noise.
-- **Balanced classes.** 300 images per class. Real inspection data is heavily imbalanced —
+- **Balanced classes.** 300 images per class. Real inspection data is heavily imbalanced;
   most frames contain no defect at all.
 - **No "no defect" class.** The model assigns one of six defect labels to every input. It cannot
   report "clean surface" or "unknown", and will confidently label an out-of-domain image.
@@ -408,7 +408,7 @@ python -m venv .venv
 # source .venv/bin/activate     # Linux/macOS
 pip install -r requirements.txt
 
-# Data — download the NEU Surface Defect Database into data/raw/
+# Data: download the NEU Surface Defect Database into data/raw/
 # (requires a Kaggle API token at ~/.kaggle/kaggle.json; the script prints
 # manual fallback sources if the Kaggle CLI is unavailable)
 python scripts/download_data.py
@@ -451,8 +451,8 @@ Notes:
 - Set `NO_ALBUMENTATIONS_UPDATE=1` to skip Albumentations' network version check, which can hang
   startup on a slow or restricted connection.
 - All randomness is seeded through `src.utils.set_seed(42)`. Splits are frozen in
-  `configs/splits.json`, which is committed to the repository so every script — and every
-  reproduction — sees identical splits. It was generated once via `src.dataset.make_splits`
+  `configs/splits.json`, which is committed to the repository so every script and every
+  reproduction sees identical splits. It was generated once via `src.dataset.make_splits`
   (stratified, seed 42) and `src.dataset.save_splits`; regenerating it is deliberately not part
   of the normal workflow, since changing splits would invalidate comparison against the results
   reported above.
@@ -483,13 +483,13 @@ build has not been confirmed.
 ## 10. References
 
 1. Song, K. and Yan, Y. (2013). A noise robust method based on completed local binary patterns for
-   hot-rolled steel strip surface defects. *Applied Surface Science*, 285: 858–864.
+   hot-rolled steel strip surface defects. *Applied Surface Science*, 285: 858-864.
 2. He, Y., Song, K., Meng, Q. and Yan, Y. (2020). An end-to-end steel surface defect detection
    approach via fusing multiple hierarchical features. *IEEE Transactions on Instrumentation and
-   Measurement*, 69(4): 1493–1504.
+   Measurement*, 69(4): 1493-1504.
 3. Selvaraju, R. R., Cogswell, M., Das, A., Vedantam, R., Parikh, D. and Batra, D. (2017).
    Grad-CAM: Visual explanations from deep networks via gradient-based localization.
-   *Proceedings of the IEEE International Conference on Computer Vision (ICCV)*, 618–626.
+   *Proceedings of the IEEE International Conference on Computer Vision (ICCV)*, 618-626.
 4. Olorunnisola, S. and Oluwatimilehin, O. (2026). *International Journal of Advanced
-   Manufacturing Technology*, 143: 2545–2558. (Referenced in Section 6 for the
+   Manufacturing Technology*, 143: 2545-2558. (Referenced in Section 6 for the
    out-of-distribution fragility finding.)

@@ -60,7 +60,7 @@ def make_splits(items, seed: int = 42):
     scan_dataset), split once via sklearn's train_test_split (twice: 70/30,
     then 50/50 of the remaining 30%).
 
-    `items` must be the original, unaugmented file list — splitting after any
+    `items` must be the original, unaugmented file list; splitting after any
     augmentation/duplication would leak the same underlying image across
     splits.
     """

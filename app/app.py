@@ -22,18 +22,18 @@ from src.model import build_model, get_gradcam_target_layers
 from src.train import find_project_root
 
 DEFECT_DESCRIPTIONS = {
-    "crazing": "Network of fine surface cracks — analogous to stress-corrosion cracking.",
-    "inclusion": "Embedded foreign material within the steel — a material/weld quality flaw.",
-    "patches": "Localized surface damage — mechanical damage and coating damage.",
-    "pitted_surface": "Localized metal loss — analogous to pitting corrosion.",
-    "rolled-in_scale": "Surface oxide rolled into the steel — affects coating adhesion and acts "
+    "crazing": "Network of fine surface cracks, analogous to stress-corrosion cracking.",
+    "inclusion": "Embedded foreign material within the steel, a material/weld quality flaw.",
+    "patches": "Localized surface damage: mechanical damage and coating damage.",
+    "pitted_surface": "Localized metal loss, analogous to pitting corrosion.",
+    "rolled-in_scale": "Surface oxide rolled into the steel; affects coating adhesion and acts "
                         "as a corrosion-initiation site.",
-    "scratches": "Linear surface damage — mechanical damage and coating damage.",
+    "scratches": "Linear surface damage: mechanical damage and coating damage.",
 }
 
 DISCLAIMER = """
 **Disclaimer:** This model is trained on the NEU hot-rolled steel strip surface defect
-dataset — **not** on in-service pipeline imagery. It is a methodology proof-of-concept
+dataset, **not** on in-service pipeline imagery. It is a methodology proof-of-concept
 for the visual-inspection layer of a pipeline-integrity workflow only, and is **not** a
 substitute for MFL (magnetic flux leakage) or ultrasonic in-line inspection.
 """
